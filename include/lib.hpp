@@ -1,41 +1,37 @@
 #pragma once
 
 #include <iostream>
-#include <entt/entt.hpp>
-
-struct Position {
-    float x;
-    float y;
-};
-
-struct Cell {
-    int x;
-    int y;
-};
-
-int div_euclid(float n, int d) {
-    return std::floor(n / d);
-}
+#include <zmq.hpp>
+#include "simulation_state_generated.h"
 
 int run() {
-    entt::registry reg;
-    entt::reactive_mixin<entt::storage<void>> storage;
+    std::cout << "start task" << std::endl;
 
-    storage.bind(reg);
-    storage.on_construct<Position>();
-    storage.on_update<Position>();
+    zmq::context_t ctx(1);
+    zmq::socket_t socket(ctx, zmq::socket_type::rep);
+    socket.bind("ipc://pipe.run");
 
-    const int range = 256;
-    for (int y = -range; y < range; ++y) {
-        for (int x = -range; x < range; ++x) {
-            const auto e = reg.create();
-            reg.emplace<Position>(e, x * 1.0f, y * 1.0f);
+    flatbuffers::FlatBufferBuilder builder(1024);
+    while (true) {
+        zmq::message_t recv_msg;
+        auto recv = socket.recv(recv_msg, zmq::recv_flags::none);
+        std::cout << "recv message" << std::endl;
+
+        builder.Clear();
+        std::vector<flatbuffers::Offset<EntityData>> entity_vec;
+        for (int32_t y = -16; y <= 16; ++y) {
+            for (int32_t x = -16; x <= 16; ++x) {
+                entity_vec.push_back(CreateEntityData(builder, x * 1.0f, 0.0f, y * 1.0f));
+            }
         }
-    }
+        auto entities = builder.CreateVector(entity_vec);
+        auto state = CreateSimulationState(builder, entities);
+        builder.Finish(state);
 
-    for (auto e : storage) {
-        auto& p = reg.get<Position>(e);
-        reg.emplace_or_replace<Cell>(e, div_euclid(p.x, 16), div_euclid(p.y, 16));
+        uint8_t* ptr = builder.GetBufferPointer();
+        size_t size = builder.GetSize();
+        zmq::message_t send_msg(ptr, size);
+        socket.send(send_msg, zmq::send_flags::none);
     }
 
     std::cout << "complete task" << std::endl;
