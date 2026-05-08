@@ -1,6 +1,6 @@
 #include <iostream>
 #include <grpcpp/grpcpp.h>
-#include "codegen/model.grpc.pb.h"
+#include "model.grpc.pb.h"
 
 class GreeterClient {
 public:
