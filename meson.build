@@ -12,43 +12,38 @@ sources = [
 # project dir and build dir is auto included.
 headers = include_directories(
   'include',
-  'third_party/entt/single_include'
+  'third_party/entt/single_include',
+  'third_party/asio/include'
 )
 
 # input dependencies.
 deps = [
-  dependency('protobuf'),
-  dependency('grpc++')
+  dependency('flatbuffers')
 ]
 
-protoc = find_program('protoc')
-grpc_cpp_plugin = find_program('grpc_cpp_plugin')
+flatc = find_program('flatc')
 gen = generator(
-  protoc,
+  flatc,
   output: [
-    '@BASENAME@.pb.cc', 
-    '@BASENAME@.pb.h',
-    '@BASENAME@.grpc.pb.cc', 
-    '@BASENAME@.grpc.pb.h'
+    '@BASENAME@_generated.h', 
   ],
   arguments: [
-    '--proto_path=@CURRENT_SOURCE_DIR@/protos',
-    '--cpp_out=@BUILD_DIR@',
-    '--grpc_out=@BUILD_DIR@',
-    '--plugin=protoc-gen-grpc=' + grpc_cpp_plugin.full_path(),
+    '--cpp',
+    '-o',
+    '@BUILD_DIR@',
     '@INPUT@'
   ]
 )
 
 # input proto files.
-proto_sources = gen.process([
-  'protos/model.proto'
+fbs_sources = gen.process([
+  'schemas/model.fbs'
 ])
 
 executable(
   'main',
   sources,
-  proto_sources,
+  fbs_sources,
   include_directories: headers,
   dependencies: deps
 )

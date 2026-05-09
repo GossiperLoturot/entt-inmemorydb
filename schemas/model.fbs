@@ -1,0 +1,15 @@
+namespace Model; 
+
+struct Vec3 { 
+  x: float; 
+  y: float;
+  z: float;
+}
+
+table Entity { 
+  id: int;
+  position: Vec3; 
+  name: string; 
+}
+
+root_type Entity;
