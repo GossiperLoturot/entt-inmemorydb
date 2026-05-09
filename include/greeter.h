@@ -2,28 +2,15 @@
 #include <grpcpp/grpcpp.h>
 #include "model.grpc.pb.h"
 
-class GreeterClient {
+class GreeterServer final : public greet::Greeter::Service {
 public:
-    GreeterClient(std::shared_ptr<grpc::Channel> channel)
-        : stub(greet::Greeter::NewStub(channel))
-    {}
-
-    std::string SayHello(const std::string& user) {
-        greet::HelloRequest request;
-        request.set_name(user);
-
-        greet::HelloReply reply;
-        grpc::ClientContext context;
-        grpc::Status status = stub->SayHello(&context, request, &reply);
-
-        if (status.ok()) {
-            return reply.message();
-        } else {
-            std::cout << status.error_code() << ": " << status.error_message() << std::endl;
-            return "gRPC failed";
-        }
+    grpc::Status SayHello(
+        grpc::ServerContext* ctx,
+        const greet::HelloRequest* req,
+        greet::HelloReply* rep
+    ) override {
+        std::string prefix("Hello ");
+        rep->set_message(prefix + req->name());
+        return grpc::Status::OK;
     }
-
-private:
-    std::unique_ptr<greet::Greeter::Stub> stub;
 };
