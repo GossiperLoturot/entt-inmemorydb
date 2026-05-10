@@ -6,10 +6,35 @@ struct Vec3 {
   z: float;
 }
 
-table Entity { 
-  id: int;
-  position: Vec3; 
-  name: string; 
+struct Vec4 { 
+  x: float; 
+  y: float;
+  z: float;
+  w: float;
 }
 
-root_type Entity;
+table CreateCommand { 
+  id: int;
+  type_id: int;
+  position: Vec3; 
+  rotation: Vec4;
+}
+
+table UpdateCommand { 
+  id: int;
+  position: Vec3; 
+  rotation: Vec4;
+}
+
+table RemoveCommand { 
+  id: int;
+}
+
+table Commands {
+  version: int;
+  create_cmds: [CreateCommand];
+  update_cmds: [UpdateCommand];
+  remove_cmds: [RemoveCommand];
+}
+
+root_type Commands;
