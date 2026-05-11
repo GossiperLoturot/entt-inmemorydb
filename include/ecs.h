@@ -1,13 +1,15 @@
+// Copyright 2026 Takumi Sugimoto
+//
 #pragma once
 
-#include <iostream>
-#include <chrono>
-#include <thread>
-#include <entt/entt.hpp>
-#include <flatbuffers/flatbuffers.h>
 #include <Eigen/Geometry>
-
-#include "model_generated.h"
+#include <flatbuffers/flatbuffers.h>
+#include <chrono>
+#include <iostream>
+#include <thread>
+#include <vector>
+#include <entt/entt.hpp>
+#include "./model_generated.h"
 
 struct Type {
     int type_id;
@@ -35,7 +37,7 @@ struct SyncAttachment {
     entt::reactive_mixin<entt::storage<void>> destroy_storage;
     entt::reactive_mixin<entt::storage<void>> update_storage;
 
-    SyncAttachment(entt::registry &registry) {
+    explicit SyncAttachment(entt::registry &registry) {
         construct_storage.bind(registry);
         construct_storage.on_construct<Type>();
 
@@ -49,39 +51,39 @@ struct SyncAttachment {
     }
 
     void sink() {
-        flatbuffers::FlatBufferBuilder builder{1024};
+        flatbuffers::FlatBufferBuilder builder(1024);
 
-        std::vector<Model::CreateEntityCommand> create_entity_cmds_vec{};
+        std::vector<Model::CreateEntityCommand> create_entity_cmds_vec;
         for (auto &&[entity, type] : construct_storage.view<Type>().each()) {
-            int id = int(entity);
+            int id = static_cast<int>(entity);
             int type_id = type.type_id;
-            auto create_entity_cmd = Model::CreateEntityCommand{id, type_id};
+            auto create_entity_cmd = Model::CreateEntityCommand(id, type_id);
             create_entity_cmds_vec.push_back(create_entity_cmd);
         }
         auto create_entity_cmds = builder.CreateVectorOfStructs(create_entity_cmds_vec);
         construct_storage.clear();
 
-        std::vector<Model::RemoveEntityCommand> remove_entity_cmds_vec{};
+        std::vector<Model::RemoveEntityCommand> remove_entity_cmds_vec;
         for (auto &&[entity, _] : destroy_storage.view<Type>().each()) {
-            int id = int(entity);
-            auto remove_entity_cmd = Model::RemoveEntityCommand{id};
+            int id = static_cast<int>(entity);
+            auto remove_entity_cmd = Model::RemoveEntityCommand(id);
             remove_entity_cmds_vec.push_back(remove_entity_cmd);
         }
         auto remove_entity_cmds = builder.CreateVectorOfStructs(remove_entity_cmds_vec);
         destroy_storage.clear();
 
-        std::vector<Model::UpdatePositionCommand> update_position_cmds_vec{};
+        std::vector<Model::UpdatePositionCommand> update_position_cmds_vec;
         for (auto &&[entity, position] : update_storage.view<Position>().each()) {
-            int id = int(entity);
-            auto update_position_cmd = Model::UpdatePositionCommand{id, position.x, position.y, position.z};
+            int id = static_cast<int>(entity);
+            auto update_position_cmd = Model::UpdatePositionCommand(id, position.x, position.y, position.z);
             update_position_cmds_vec.push_back(update_position_cmd);
         }
         auto update_position_cmds = builder.CreateVectorOfStructs(update_position_cmds_vec);
 
-        std::vector<Model::UpdateRotationCommand> update_rotation_cmds_vec{};
+        std::vector<Model::UpdateRotationCommand> update_rotation_cmds_vec;
         for (auto &&[entity, rotation] : update_storage.view<Rotation>().each()) {
-            int id = int(entity);
-            auto update_rotation_cmd = Model::UpdateRotationCommand{id, rotation.x, rotation.y, rotation.z, rotation.w};
+            int id = static_cast<int>(entity);
+            auto update_rotation_cmd = Model::UpdateRotationCommand(id, rotation.x, rotation.y, rotation.z, rotation.w);
             update_rotation_cmds_vec.push_back(update_rotation_cmd);
         }
         auto update_rotation_cmds = builder.CreateVectorOfStructs(update_rotation_cmds_vec);
@@ -93,7 +95,7 @@ struct SyncAttachment {
         builder.Finish(cmds);
 
         int size = builder.GetSize();
-        uint8_t* buf = builder.GetBufferPointer();
+        const uint8_t* buf = builder.GetBufferPointer();
         std::cout << "size: " << size <<  ", ptr: " << buf << std::endl;
     }
 };
@@ -115,18 +117,16 @@ void update_world(entt::registry &registry, float delta) {
     auto &time_ctx = registry.ctx().get<TimeCtx>();
 
     // alloc cache
-    Eigen::Quaternionf q{};
-    Eigen::AngleAxisf delta_q{delta, Eigen::Vector3f{0.0f, 1.0f, 0.0f}};
+    Eigen::AngleAxisf delta_q(delta, Eigen::Vector3f(0.0f, 1.0f, 0.0f));
 
     auto view = registry.view<Position, Rotation>();
     for (auto &&[entity, position, rotation] : view.each()) {
-
         // position update
         position.z = position.z + sin(time_ctx.uptime);
         registry.replace<Position>(entity, position);
 
         // rotation update
-        q = Eigen::Quaternionf{rotation.w, rotation.x, rotation.y, rotation.z} * delta_q;
+        auto q = Eigen::Quaternionf(rotation.w, rotation.x, rotation.y, rotation.z) * delta_q;
         rotation.x = q.x();
         rotation.y = q.y();
         rotation.z = q.z();
@@ -139,9 +139,9 @@ void update_world(entt::registry &registry, float delta) {
 }
 
 void run() {
-    entt::registry registry{};
+    entt::registry registry;
 
-    auto sync = SyncAttachment{registry};
+    auto sync = SyncAttachment(registry);
     init_world(registry);
 
     const std::chrono::duration<float> frame_time(1.0f / 60.0f);

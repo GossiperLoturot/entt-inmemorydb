@@ -13,13 +13,13 @@ sources = [
 headers = include_directories(
   'include',
   'third_party/entt/single_include',
-  'third_party/asio/include'
 )
 
 # input dependencies.
 deps = [
-  dependency('flatbuffers'),
-  dependency('eigen3')
+  dependency('asio'),
+  dependency('eigen3'),
+  dependency('flatbuffers')
 ]
 
 flatc = find_program('flatc')
