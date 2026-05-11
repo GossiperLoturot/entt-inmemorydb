@@ -18,7 +18,8 @@ headers = include_directories(
 
 # input dependencies.
 deps = [
-  dependency('flatbuffers')
+  dependency('flatbuffers'),
+  dependency('eigen3')
 ]
 
 flatc = find_program('flatc')

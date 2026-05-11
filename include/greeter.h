@@ -5,7 +5,7 @@
 #include <flatbuffers/flatbuffers.h>
 #include "model_generated.h"
 
-int run() {
+void run() {
     try {
         asio::io_context ctx{};
         asio::ip::tcp::acceptor acceptor{ctx, asio::ip::tcp::endpoint{asio::ip::make_address("0.0.0.0"), 12345}};
@@ -47,8 +47,5 @@ int run() {
 
     } catch (const std::exception& e) {
         std::cerr << "server exception : " << e.what() << std::endl;
-        return -1;
     }
-
-    return 0;
 }

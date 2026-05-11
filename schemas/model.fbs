@@ -1,40 +1,35 @@
 namespace Model; 
 
-struct Vec3 { 
+struct CreateEntityCommand { 
+  id: int;
+  type_id: int;
+}
+
+struct RemoveEntityCommand { 
+  id: int;
+}
+
+struct UpdatePositionCommand { 
+  id: int;
   x: float; 
   y: float;
   z: float;
 }
 
-struct Vec4 { 
+struct UpdateRotationCommand { 
+  id: int;
   x: float; 
   y: float;
   z: float;
   w: float;
 }
 
-table CreateCommand { 
-  id: int;
-  type_id: int;
-  position: Vec3; 
-  rotation: Vec4;
-}
-
-table UpdateCommand { 
-  id: int;
-  position: Vec3; 
-  rotation: Vec4;
-}
-
-table RemoveCommand { 
-  id: int;
-}
-
 table Commands {
   version: int;
-  create_cmds: [CreateCommand];
-  update_cmds: [UpdateCommand];
-  remove_cmds: [RemoveCommand];
+  create_entity_cmds: [CreateEntityCommand];
+  remove_entity_cmds: [RemoveEntityCommand];
+  update_position_cmds: [UpdatePositionCommand];
+  update_rotation_cmds: [UpdateRotationCommand];
 }
 
 root_type Commands;
