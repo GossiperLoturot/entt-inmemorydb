@@ -33,12 +33,62 @@ struct TimeCtx {
     float uptime;
 };
 
-struct SyncAttachment {
+void init_world(entt::registry &registry) {
+    registry.ctx().emplace<TimeCtx>(0.0f);
+
+    for (int y = -32; y <= 32; ++y) {
+        for (int x = -32; x <= 32; ++x) {
+            entt::entity entity = registry.create();
+            registry.emplace<Type>(entity, 0);
+            registry.emplace<Position>(entity, x * 1.0f, sinf(x * 0.1f + y * 0.1f), y * 1.0f);
+            registry.emplace<Rotation>(entity, 0.0f, 0.0f, 0.0f, 1.0f);
+        }
+    }
+}
+
+void update_world(entt::registry &registry, float delta) {
+    auto &time_ctx = registry.ctx().get<TimeCtx>();
+
+    // alloc cache
+    Eigen::AngleAxisf delta_q(delta, Eigen::Vector3f(0.0f, 1.0f, 0.0f));
+
+    auto view = registry.view<Position, Rotation>();
+    for (auto &&[entity, position, rotation] : view.each()) {
+        // position update
+        position.y = position.y + sin(time_ctx.uptime) * delta;
+        registry.replace<Position>(entity, position);
+
+        // rotation update
+        auto q = Eigen::Quaternionf(rotation.w, rotation.x, rotation.y, rotation.z) * delta_q;
+        rotation.x = q.x();
+        rotation.y = q.y();
+        rotation.z = q.z();
+        rotation.w = q.w();
+        registry.replace<Rotation>(entity, rotation);
+    }
+
+    // elapsed time
+    time_ctx.uptime += delta;
+}
+
+struct ListenProactor {
+    asio::io_context &io_ctx;
+    asio::ip::tcp::acceptor acceptor;
+    asio::ip::tcp::socket socket;
+    uint32_t receive_buf;
+    std::vector<uint8_t> send_buf;
+
     entt::reactive_mixin<entt::storage<void>> construct_storage;
     entt::reactive_mixin<entt::storage<void>> destroy_storage;
     entt::reactive_mixin<entt::storage<void>> update_storage;
+    flatbuffers::FlatBufferBuilder builder;
 
-    explicit SyncAttachment(entt::registry &registry) {
+    explicit ListenProactor(asio::io_context &io_ctx, const int16_t port, entt::registry& registry) :
+        io_ctx(io_ctx),
+        acceptor(io_ctx, asio::ip::tcp::endpoint(asio::ip::tcp::v4(), port)),
+        socket(io_ctx),
+        receive_buf(0),
+        builder(1024) {
         construct_storage.bind(registry);
         construct_storage.on_construct<Type>();
 
@@ -46,13 +96,45 @@ struct SyncAttachment {
         destroy_storage.on_destroy<Type>();
 
         update_storage.bind(registry);
-        update_storage
-            .on_update<Position>()
-            .on_update<Rotation>();
+        update_storage.on_update<Position>();
+        update_storage.on_update<Rotation>();
     }
 
-    flatbuffers::FlatBufferBuilder sink() {
-        flatbuffers::FlatBufferBuilder builder(1024);
+    void start_accept() {
+        acceptor.async_accept(
+            socket,
+            [this](const asio::error_code &e) { accept_handler(e); });
+    }
+
+    void accept_handler(const asio::error_code &e) {
+        if (!e) {
+            std::cout << "connection established." << std::endl;
+            start_receive();
+        } else {
+            std::cout << "failed to establish connection. " << e.message() << std::endl;
+            start_close();
+        }
+    }
+
+    void start_receive() {
+        asio::async_read(
+            socket,
+            asio::buffer(&receive_buf, sizeof(receive_buf)),
+            [this](const asio::error_code &e, const size_t size) { receive_handler(e, size); });
+    }
+
+    void receive_handler(const asio::error_code &e, const size_t size) {
+        if (!e) {
+            std::cout << "receive data. " << ntohl(receive_buf) << std::endl;
+            start_send();
+        } else {
+            std::cout << "failed to receive data. " << e.message() << std::endl;
+            start_close();
+        }
+    }
+
+    void start_send() {
+        builder.Clear();
 
         std::vector<Model::CreateEntityCommand> create_entity_cmds_vec;
         for (auto &&[entity, type] : construct_storage.view<Type>().each()) {
@@ -95,98 +177,6 @@ struct SyncAttachment {
         auto cmds = Model::CreateCommands(builder, version, create_entity_cmds, remove_entity_cmds, update_position_cmds, update_rotation_cmds);
         builder.Finish(cmds);
 
-        return builder;
-    }
-};
-
-void init_world(entt::registry &registry) {
-    registry.ctx().emplace<TimeCtx>(0.0f);
-
-    for (int y = -32; y <= 32; ++y) {
-        for (int x = -32; x <= 32; ++x) {
-            entt::entity entity = registry.create();
-            registry.emplace<Type>(entity, 0);
-            registry.emplace<Position>(entity, x * 1.0f, sinf(x * 0.1f + y * 0.1f), y * 1.0f);
-            registry.emplace<Rotation>(entity, 0.0f, 0.0f, 0.0f, 1.0f);
-        }
-    }
-}
-
-void update_world(entt::registry &registry, float delta) {
-    auto &time_ctx = registry.ctx().get<TimeCtx>();
-
-    // alloc cache
-    Eigen::AngleAxisf delta_q(delta, Eigen::Vector3f(0.0f, 1.0f, 0.0f));
-
-    auto view = registry.view<Position, Rotation>();
-    for (auto &&[entity, position, rotation] : view.each()) {
-        // position update
-        position.z = position.z + sin(time_ctx.uptime);
-        registry.replace<Position>(entity, position);
-
-        // rotation update
-        auto q = Eigen::Quaternionf(rotation.w, rotation.x, rotation.y, rotation.z) * delta_q;
-        rotation.x = q.x();
-        rotation.y = q.y();
-        rotation.z = q.z();
-        rotation.w = q.w();
-        registry.replace<Rotation>(entity, rotation);
-    }
-
-    // elapsed time
-    time_ctx.uptime += delta;
-}
-
-struct ListenProactor {
-    asio::io_context &io_ctx;
-    asio::ip::tcp::acceptor acceptor;
-    asio::ip::tcp::socket socket;
-    SyncAttachment &sync_attachment;
-    uint32_t receive_buf;
-    std::vector<uint8_t> send_buf;
-
-    explicit ListenProactor(asio::io_context &io_ctx, const int16_t port, SyncAttachment& sync_attachment):
-        io_ctx(io_ctx),
-        acceptor(io_ctx, asio::ip::tcp::endpoint(asio::ip::tcp::v4(), port)),
-        socket(io_ctx),
-        sync_attachment(sync_attachment)
-    {}
-
-    void start_accept() {
-        acceptor.async_accept(
-            socket,
-            [this](const asio::error_code &e) { accept_handler(e); });
-    }
-
-    void accept_handler(const asio::error_code &e) {
-        if (!e) {
-            std::cout << "connection established." << std::endl;
-            start_receive();
-        } else {
-            std::cout << "failed to establish connection. " << e.message() << std::endl;
-            start_close();
-        }
-    }
-
-    void start_receive() {
-        asio::async_read(
-            socket,
-            asio::buffer(&receive_buf, sizeof(receive_buf)),
-            [this](const asio::error_code &e, const size_t size) { receive_handler(e, size); });
-    }
-
-    void receive_handler(const asio::error_code &e, const size_t size) {
-        if (!e) {
-            std::cout << "receive data. " << ntohl(receive_buf) << std::endl;
-            start_send();
-        } else {
-            std::cout << "failed to receive data. " << e.message() << std::endl;
-            start_close();
-        }
-    }
-
-    void start_send() {
-        auto builder = sync_attachment.sink();
         const uint8_t* buf = builder.GetBufferPointer();
         uint32_t payload_size = builder.GetSize();
 
@@ -198,7 +188,7 @@ struct ListenProactor {
 
         asio::async_write(
             socket,
-            asio::buffer(&send_buf, sizeof(send_buf)),
+            asio::buffer(send_buf),
             [this](const asio::error_code &e, const size_t size) { send_handler(e, size); });
     }
 
@@ -214,18 +204,15 @@ struct ListenProactor {
 
     void start_close() {
         socket.close();
-        start_accept();
     }
 };
 
 void run() {
     asio::io_context io_ctx;
-    auto guard = asio::make_work_guard(io_ctx);
 
     entt::registry registry;
 
-    auto sync = SyncAttachment(registry);
-    ListenProactor listener(io_ctx, 12345, sync);
+    ListenProactor listener(io_ctx, 12345, registry);
     listener.start_accept();
 
     init_world(registry);
