@@ -1,5 +1,5 @@
 // Copyright 2026 Takumi Sugimoto
-//
+
 #pragma once
 
 #include <Eigen/Geometry>
@@ -8,6 +8,7 @@
 #include <iostream>
 #include <thread>
 #include <vector>
+#include <asio.hpp>
 #include <entt/entt.hpp>
 #include "./model_generated.h"
 
@@ -50,7 +51,7 @@ struct SyncAttachment {
             .on_update<Rotation>();
     }
 
-    void sink() {
+    flatbuffers::FlatBufferBuilder sink() {
         flatbuffers::FlatBufferBuilder builder(1024);
 
         std::vector<Model::CreateEntityCommand> create_entity_cmds_vec;
@@ -94,9 +95,7 @@ struct SyncAttachment {
         auto cmds = Model::CreateCommands(builder, version, create_entity_cmds, remove_entity_cmds, update_position_cmds, update_rotation_cmds);
         builder.Finish(cmds);
 
-        int size = builder.GetSize();
-        const uint8_t* buf = builder.GetBufferPointer();
-        std::cout << "size: " << size <<  ", ptr: " << buf << std::endl;
+        return builder;
     }
 };
 
@@ -138,10 +137,97 @@ void update_world(entt::registry &registry, float delta) {
     time_ctx.uptime += delta;
 }
 
+struct ListenProactor {
+    asio::io_context &io_ctx;
+    asio::ip::tcp::acceptor acceptor;
+    asio::ip::tcp::socket socket;
+    SyncAttachment &sync_attachment;
+    uint32_t receive_buf;
+    std::vector<uint8_t> send_buf;
+
+    explicit ListenProactor(asio::io_context &io_ctx, const int16_t port, SyncAttachment& sync_attachment):
+        io_ctx(io_ctx),
+        acceptor(io_ctx, asio::ip::tcp::endpoint(asio::ip::tcp::v4(), port)),
+        socket(io_ctx),
+        sync_attachment(sync_attachment)
+    {}
+
+    void start_accept() {
+        acceptor.async_accept(
+            socket,
+            [this](const asio::error_code &e) { accept_handler(e); });
+    }
+
+    void accept_handler(const asio::error_code &e) {
+        if (!e) {
+            std::cout << "connection established." << std::endl;
+            start_receive();
+        } else {
+            std::cout << "failed to establish connection. " << e.message() << std::endl;
+            start_close();
+        }
+    }
+
+    void start_receive() {
+        asio::async_read(
+            socket,
+            asio::buffer(&receive_buf, sizeof(receive_buf)),
+            [this](const asio::error_code &e, const size_t size) { receive_handler(e, size); });
+    }
+
+    void receive_handler(const asio::error_code &e, const size_t size) {
+        if (!e) {
+            std::cout << "receive data. " << ntohl(receive_buf) << std::endl;
+            start_send();
+        } else {
+            std::cout << "failed to receive data. " << e.message() << std::endl;
+            start_close();
+        }
+    }
+
+    void start_send() {
+        auto builder = sync_attachment.sink();
+        const uint8_t* buf = builder.GetBufferPointer();
+        uint32_t payload_size = builder.GetSize();
+
+        uint32_t payload_size_n = htonl(payload_size);
+
+        send_buf.resize(sizeof(uint32_t) + payload_size);
+        std::memcpy(send_buf.data(), &payload_size_n, sizeof(uint32_t));
+        std::memcpy(send_buf.data() + sizeof(uint32_t), buf, payload_size);
+
+        asio::async_write(
+            socket,
+            asio::buffer(&send_buf, sizeof(send_buf)),
+            [this](const asio::error_code &e, const size_t size) { send_handler(e, size); });
+    }
+
+    void send_handler(const asio::error_code &e, const size_t size) {
+        if (!e) {
+            std::cout << "sent data. " << size << " bytes." << std::endl;
+            start_receive();
+        } else {
+            std::cout << "failed to send data. " << e.message() << std::endl;
+            start_close();
+        }
+    }
+
+    void start_close() {
+        socket.close();
+        start_accept();
+    }
+};
+
 void run() {
+    asio::io_context io_ctx;
+    auto guard = asio::make_work_guard(io_ctx);
+
     entt::registry registry;
 
     auto sync = SyncAttachment(registry);
+    ListenProactor listener(io_ctx, 12345, sync);
+    listener.start_accept();
+
     init_world(registry);
 
     const std::chrono::duration<float> frame_time(1.0f / 60.0f);
@@ -153,7 +239,7 @@ void run() {
         last_time = current_time;
 
         update_world(registry, elapsed.count());
-        sync.sink();
+        io_ctx.poll();
 
         auto end_time = std::chrono::high_resolution_clock::now();
         std::chrono::duration<float> load_time = end_time - current_time;
