@@ -4,23 +4,15 @@ project(
   default_options : ['cpp_std=c++17']
 )
 
-# input source files.
-sources = [
-  'src/main.cc',
-]
-
-# project dir and build dir is auto included.
-headers = include_directories(
-  'include',
-  'third_party/entt/single_include',
-)
-
 # input dependencies.
 deps = [
   dependency('asio'),
   dependency('eigen3'),
-  dependency('flatbuffers')
+  dependency('flatbuffers'),
 ]
+
+# project dir and build dir is auto included.
+headers = include_directories('third_party/entt/single_include')
 
 flatc = find_program('flatc')
 gen = generator(
@@ -35,16 +27,21 @@ gen = generator(
     '@INPUT@'
   ]
 )
+fbs_sources = gen.process(['schemas/model.fbs'])
 
-# input proto files.
-fbs_sources = gen.process([
-  'schemas/model.fbs'
-])
-
-executable(
-  'main',
-  sources,
-  fbs_sources,
+# build library.
+lib = static_library(
+  'core',
+  ['src/ecs.cc'] + fbs_sources,
   include_directories: headers,
   dependencies: deps
+)
+
+# build target.
+exe = executable(
+  'main',
+  ['src/main.cc'],
+  include_directories: headers,
+  dependencies: deps,
+  link_with: lib
 )
