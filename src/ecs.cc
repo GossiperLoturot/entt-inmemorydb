@@ -3,10 +3,34 @@
 #include "include/ecs.h"
 
 #include <Eigen/Geometry>
+#include <flatbuffers/flatbuffers.h>
 #include <iostream>
 #include <thread>
 #include <vector>
+#include <asio.hpp>
+#include <entt/entt.hpp>
 #include "./model_generated.h"
+
+struct Type {
+    int type_id;
+};
+
+struct Position {
+    float x;
+    float y;
+    float z;
+};
+
+struct Rotation {
+    float x;
+    float y;
+    float z;
+    float w;
+};
+
+struct TimeCtx {
+    float uptime;
+};
 
 void init_world(entt::registry &registry) {
     registry.ctx().emplace<TimeCtx>(0.0f);
@@ -46,128 +70,141 @@ void update_world(entt::registry &registry, float delta) {
     time_ctx.uptime += delta;
 }
 
-ListenProactor::ListenProactor(asio::io_context &io_ctx, const int16_t port, entt::registry& registry) :
-    io_ctx(io_ctx),
-    acceptor(io_ctx, asio::ip::tcp::endpoint(asio::ip::tcp::v4(), port)),
-    socket(io_ctx),
-    receive_buf(0),
-    builder(1024) {
-    construct_storage.bind(registry);
-    construct_storage.on_construct<Type>();
+struct ListenProactor {
+    asio::io_context &io_ctx;
+    asio::ip::tcp::acceptor acceptor;
+    asio::ip::tcp::socket socket;
+    uint32_t receive_buf;
+    std::vector<uint8_t> send_buf;
 
-    destroy_storage.bind(registry);
-    destroy_storage.on_destroy<Type>();
+    entt::reactive_mixin<entt::storage<void>> construct_storage;
+    entt::reactive_mixin<entt::storage<void>> destroy_storage;
+    entt::reactive_mixin<entt::storage<void>> update_storage;
+    flatbuffers::FlatBufferBuilder builder;
 
-    update_storage.bind(registry);
-    update_storage.on_update<Position>();
-    update_storage.on_update<Rotation>();
-}
+    explicit ListenProactor(asio::io_context &io_ctx, const int16_t port, entt::registry& registry) :
+        io_ctx(io_ctx),
+        acceptor(io_ctx, asio::ip::tcp::endpoint(asio::ip::tcp::v4(), port)),
+        socket(io_ctx),
+        receive_buf(0),
+        builder(1024) {
+        construct_storage.bind(registry);
+        construct_storage.on_construct<Type>();
 
-void ListenProactor::start_accept() {
-    acceptor.async_accept(
-        socket,
-        [this](const asio::error_code &e) { accept_handler(e); });
-}
+        destroy_storage.bind(registry);
+        destroy_storage.on_destroy<Type>();
 
-void ListenProactor::accept_handler(const asio::error_code &e) {
-    if (!e) {
-        std::cout << "connection established." << std::endl;
-        start_receive();
-    } else {
-        std::cout << "failed to establish connection. " << e.message() << std::endl;
-        start_close();
+        update_storage.bind(registry);
+        update_storage.on_update<Position>();
+        update_storage.on_update<Rotation>();
     }
-}
 
-void ListenProactor::start_receive() {
-    asio::async_read(
-        socket,
-        asio::buffer(&receive_buf, sizeof(receive_buf)),
-        [this](const asio::error_code &e, const size_t size) { receive_handler(e, size); });
-}
-
-void ListenProactor::receive_handler(const asio::error_code &e, const size_t size) {
-    if (!e) {
-        std::cout << "receive data. " << ntohl(receive_buf) << std::endl;
-        start_send();
-    } else {
-        std::cout << "failed to receive data. " << e.message() << std::endl;
-        start_close();
+    void start_accept() {
+        acceptor.async_accept(
+            socket,
+            [this](const asio::error_code &e) { accept_handler(e); });
     }
-}
 
-void ListenProactor::start_send() {
-    builder.Clear();
-
-    std::vector<Model::CreateEntityCommand> create_entity_cmds_vec;
-    for (auto &&[entity, type] : construct_storage.view<Type>().each()) {
-        int id = static_cast<int>(entity);
-        int type_id = type.type_id;
-        auto create_entity_cmd = Model::CreateEntityCommand(id, type_id);
-        create_entity_cmds_vec.push_back(create_entity_cmd);
+    void accept_handler(const asio::error_code &e) {
+        if (!e) {
+            std::cout << "connection established." << std::endl;
+            start_receive();
+        } else {
+            std::cout << "failed to establish connection. " << e.message() << std::endl;
+            start_close();
+        }
     }
-    auto create_entity_cmds = builder.CreateVectorOfStructs(create_entity_cmds_vec);
-    construct_storage.clear();
 
-    std::vector<Model::RemoveEntityCommand> remove_entity_cmds_vec;
-    for (auto &&[entity, _] : destroy_storage.view<Type>().each()) {
-        int id = static_cast<int>(entity);
-        auto remove_entity_cmd = Model::RemoveEntityCommand(id);
-        remove_entity_cmds_vec.push_back(remove_entity_cmd);
+    void start_receive() {
+        asio::async_read(
+            socket,
+            asio::buffer(&receive_buf, sizeof(receive_buf)),
+            [this](const asio::error_code &e, const size_t size) { receive_handler(e, size); });
     }
-    auto remove_entity_cmds = builder.CreateVectorOfStructs(remove_entity_cmds_vec);
-    destroy_storage.clear();
 
-    std::vector<Model::UpdatePositionCommand> update_position_cmds_vec;
-    for (auto &&[entity, position] : update_storage.view<Position>().each()) {
-        int id = static_cast<int>(entity);
-        auto update_position_cmd = Model::UpdatePositionCommand(id, position.x, position.y, position.z);
-        update_position_cmds_vec.push_back(update_position_cmd);
+    void receive_handler(const asio::error_code &e, const size_t size) {
+        if (!e) {
+            std::cout << "receive data. " << ntohl(receive_buf) << std::endl;
+            start_send();
+        } else {
+            std::cout << "failed to receive data. " << e.message() << std::endl;
+            start_close();
+        }
     }
-    auto update_position_cmds = builder.CreateVectorOfStructs(update_position_cmds_vec);
 
-    std::vector<Model::UpdateRotationCommand> update_rotation_cmds_vec;
-    for (auto &&[entity, rotation] : update_storage.view<Rotation>().each()) {
-        int id = static_cast<int>(entity);
-        auto update_rotation_cmd = Model::UpdateRotationCommand(id, rotation.x, rotation.y, rotation.z, rotation.w);
-        update_rotation_cmds_vec.push_back(update_rotation_cmd);
+    void start_send() {
+        builder.Clear();
+
+        std::vector<Model::CreateEntityCommand> create_entity_cmds_vec;
+        for (auto &&[entity, type] : construct_storage.view<Type>().each()) {
+            int id = static_cast<int>(entity);
+            int type_id = type.type_id;
+            auto create_entity_cmd = Model::CreateEntityCommand(id, type_id);
+            create_entity_cmds_vec.push_back(create_entity_cmd);
+        }
+        auto create_entity_cmds = builder.CreateVectorOfStructs(create_entity_cmds_vec);
+        construct_storage.clear();
+
+        std::vector<Model::RemoveEntityCommand> remove_entity_cmds_vec;
+        for (auto &&[entity, _] : destroy_storage.view<Type>().each()) {
+            int id = static_cast<int>(entity);
+            auto remove_entity_cmd = Model::RemoveEntityCommand(id);
+            remove_entity_cmds_vec.push_back(remove_entity_cmd);
+        }
+        auto remove_entity_cmds = builder.CreateVectorOfStructs(remove_entity_cmds_vec);
+        destroy_storage.clear();
+
+        std::vector<Model::UpdatePositionCommand> update_position_cmds_vec;
+        for (auto &&[entity, position] : update_storage.view<Position>().each()) {
+            int id = static_cast<int>(entity);
+            auto update_position_cmd = Model::UpdatePositionCommand(id, position.x, position.y, position.z);
+            update_position_cmds_vec.push_back(update_position_cmd);
+        }
+        auto update_position_cmds = builder.CreateVectorOfStructs(update_position_cmds_vec);
+
+        std::vector<Model::UpdateRotationCommand> update_rotation_cmds_vec;
+        for (auto &&[entity, rotation] : update_storage.view<Rotation>().each()) {
+            int id = static_cast<int>(entity);
+            auto update_rotation_cmd = Model::UpdateRotationCommand(id, rotation.x, rotation.y, rotation.z, rotation.w);
+            update_rotation_cmds_vec.push_back(update_rotation_cmd);
+        }
+        auto update_rotation_cmds = builder.CreateVectorOfStructs(update_rotation_cmds_vec);
+
+        update_storage.clear();
+
+        int version = 0;
+        auto cmds = Model::CreateCommands(builder, version, create_entity_cmds, remove_entity_cmds, update_position_cmds, update_rotation_cmds);
+        builder.Finish(cmds);
+
+        const uint8_t* buf = builder.GetBufferPointer();
+        uint32_t payload_size = builder.GetSize();
+
+        uint32_t payload_size_n = htonl(payload_size);
+
+        send_buf.resize(sizeof(uint32_t) + payload_size);
+        std::memcpy(send_buf.data(), &payload_size_n, sizeof(uint32_t));
+        std::memcpy(send_buf.data() + sizeof(uint32_t), buf, payload_size);
+
+        asio::async_write(
+            socket,
+            asio::buffer(send_buf),
+            [this](const asio::error_code &e, const size_t size) { send_handler(e, size); });
     }
-    auto update_rotation_cmds = builder.CreateVectorOfStructs(update_rotation_cmds_vec);
 
-    update_storage.clear();
-
-    int version = 0;
-    auto cmds = Model::CreateCommands(builder, version, create_entity_cmds, remove_entity_cmds, update_position_cmds, update_rotation_cmds);
-    builder.Finish(cmds);
-
-    const uint8_t* buf = builder.GetBufferPointer();
-    uint32_t payload_size = builder.GetSize();
-
-    uint32_t payload_size_n = htonl(payload_size);
-
-    send_buf.resize(sizeof(uint32_t) + payload_size);
-    std::memcpy(send_buf.data(), &payload_size_n, sizeof(uint32_t));
-    std::memcpy(send_buf.data() + sizeof(uint32_t), buf, payload_size);
-
-    asio::async_write(
-        socket,
-        asio::buffer(send_buf),
-        [this](const asio::error_code &e, const size_t size) { send_handler(e, size); });
-}
-
-void ListenProactor::send_handler(const asio::error_code &e, const size_t size) {
-    if (!e) {
-        std::cout << "sent data. " << size << " bytes." << std::endl;
-        start_receive();
-    } else {
-        std::cout << "failed to send data. " << e.message() << std::endl;
-        start_close();
+    void send_handler(const asio::error_code &e, const size_t size) {
+        if (!e) {
+            std::cout << "sent data. " << size << " bytes." << std::endl;
+            start_receive();
+        } else {
+            std::cout << "failed to send data. " << e.message() << std::endl;
+            start_close();
+        }
     }
-}
 
-void ListenProactor::start_close() {
-    socket.close();
-}
+    void start_close() {
+        socket.close();
+    }
+};
 
 void run() {
     asio::io_context io_ctx;

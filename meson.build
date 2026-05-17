@@ -37,11 +37,26 @@ lib = static_library(
   dependencies: deps
 )
 
+# test target.
+test_exe = executable(
+  'core_test',
+  ['src/test.cc'],
+  dependencies: dependency('gtest'),
+  link_with: lib
+)
+test('core_test', test_exe)
+
+# benchmark target.
+bench_exe = executable(
+  'core_bench',
+  ['src/bench.cc'],
+  dependencies: dependency('benchmark'),
+  link_with: lib
+)
+
 # build target.
 exe = executable(
   'main',
   ['src/main.cc'],
-  include_directories: headers,
-  dependencies: deps,
   link_with: lib
 )
