@@ -206,6 +206,8 @@ struct ListenProactor {
     }
 };
 
+int calc(int a, int b) { return a + b; }
+
 void run() {
     asio::io_context io_ctx;
 
